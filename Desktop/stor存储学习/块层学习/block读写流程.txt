@@ -1,0 +1,108 @@
+【写流程】bio
+=========================
+【vfs层】
+vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
+__vfs_write
+file->f_op->write(file, p, count, pos)
+========
+【fs层】/Users/zhanghao/Desktop/存储学习/块层学习/读写流程.txt
+write_begin	= blkdev_write_begin[不带文件系统的块设备写]
+	grab_cache_page_write_begin [申请page，具体要细看]
+	__block_write_begin
+		ll_rw_block(READ, 1, &bh);
+			submit_bh
+				submit_bh_wbc(rw, bh, 0, NULL);//(int rw, struct buffer_head *bh,unsigned long bio_flags, struct writeback_control *wbc)
+=======
+【块层】
+submit_bio
+generic_make_request(bio)
+q->make_request_fn(q, bio) //q->make_request_fn = mfn;  mfn = blk_queue_bio
+blk_queue_bio(struct request_queue *q, struct bio *bio)
+__blk_run_queue(q);
+__blk_run_queue_uncond(q);
+q->request_fn(q);
+=======
+【scsi 层】
+scsi_request_fn  //q = __scsi_alloc_queue(sdev->host, scsi_request_fn);  q = blk_init_queue(request_fn, NULL);
+req = blk_peek_request(q); //偷看队列顶部的请求
+blk_start_request //处理这个请求，把这个请求从队列中出对					
+cmd = req->special;
+scsi_init_cmd_errh(cmd); //把这个请求分装成scci 命令
+cmd->scsi_done = scsi_done; //设置scsi 命令的完成函数
+rtn = scsi_dispatch_cmd(cmd); //把这个scsi 命令调度到scsi low-level层
+
+scsi_done; 
+blk_complete_request
+__blk_complete_request
+raise_blk_irq //如果这个scsi命令下发完成，就报一个软中断上来
+
+=========================			
+					
+【写流程】dio
+================================================================
+【读流程】
+read系统调用SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
+vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+__vfs_read   [read函数是根据不同的文件系统定义初始化不同的]
+1、如果是不带文件系统的 read  ？？？？待补充 是不是 def_blk_aops 这个操作入口
+2、带文件系统的read
+
+================================================================================================================
+http://cache.baiducontent.com/c?m=9f65cb4a8c8507ed4fece7631046893b4c4380146d96864968d4e414c4224605143ab3fb7071495393d82f2747f41802bded602571507be9dad5824ad6b094232c9c6269304a891046900eafba1d78d621e01bb8f54eb1fdae65d3b9d2a299130f99035b2d&p=80769a4796db0bfa10bd9b7d0c16cc&newp=aa498f16d9c101ff57ee957e1b4b81231610db2151d7d4126b82c825d7331b001c3bbfb42323160fd0c27b6300a54d5decfa33723d0221a3dda5c91d9fb4c57479c8&user=baidu&fm=sc&query=CFQ+ioscheduler+tunable&qid=cb8f49fd0004c933&p1=5
+
+[cfq调度算法，下面内容翻译自cfq-iosched.txt]
+1、cfq调度算法的作用是为所有 有io请求操作的进程 提供一个公平的磁盘带宽。
+2、cfq为每个有io请求的进程包含了一个处理队列;
+  如果是异步的请求，cfq会根据进程的io调度优先级来 批处理 所有进程的所有请求
+
+3、cfq调度器可调的参数
+注：下面参数在sys目录下可见，在代码中对应的参数是 cfq_参数
+［slice_idle］
+等待IO请求的闲置时长
+
+ [slice_async]
+定义异步写入的超时值，每次异步写操作最长时长是多少，默认值为40秒
+
+ [slice_sync]
+定义同步写入操作超时值，因为同步比较慢，所以其默认值是100秒， 因为是从进程直接到磁盘的，所以超时时间会长一点
+
+ [quantum]
+CFQ 一次可以发出的IO请求数，一批最大可以调度的IO数，限制IO队列深度的，简单来说就是定义设备一次可以接收的IO请求的队列长度，默认为8
+
+
+［back_seek_max］
+反向寻道可能有负面影响，负载小的时候可以启用，否则不要使用反向寻道太多值
+
+［back_seek_penalty］
+反向寻道做惩罚，如果不得不使用反向寻道的话，那么必须对其做出一定惩罚，一旦做完惩罚之后，必须要正向寻道更多次数
+
+［fifo_expire_async］
+用来控制异步请求等待时间长度，默认是250毫秒，过期之后无法满足的异步请求将会被移动到调度队列中，也就意味着要重新调度。 通常这些值不需要调整
+
+［fifo_expire_sync］
+用于同步请求的,严格来讲写操作都是在内存中完成 过周期之后才会同步至硬盘中，站在计算机角度来说这种操作都被称为异步，而同步则是为了尽可能保证数据会被第一时间写到磁盘上来，数据不会在内存上逗留，直接写入磁盘
+
+［group_idle］
+
+4、cfq 组 调度 
+
+5、 CFQ调度器在整个工作过程中所涉及到的结构比较多，我们可以把这些结构分为两类，一类是用来描述调度器本身相关的结构，由于CFQ将进程作为考虑对象，因此另一类结构就是特定于进程的结构
+
+＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
+请求的调度
+［1］挑cgroup
+cfq_dispatch_requests
+cfq_select_queue
+cfq_choose_cfqg
+cfq_get_next_cfqg
+
+［2］挑service tree
+choose_wl_class_and_type
+
+［3］挑cfq_queue
+cfq_get_next_queue   这个只是拿红黑树的左树，真正的排序是在别的地方做的
+
+［4］挑request
+cfq_dispatch_request
+
+请求的合并、排序
