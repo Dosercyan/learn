@@ -1,0 +1,29 @@
+bond_alb_monitor
+用于检查是否需要更新对端的arp表象
+
+1、如果是nor先发arp request的情况
+bond_alb_xmit
+rlb_arp_xmit
+rlb_choose_channel{/*如果一开始bond_info->rx_slave为空的话，就是eth0，如果bond_info->rx_slave是eth0，则用eth1上一个包是eth0的，这个包就是eth1*/}
+
+ether_addr_copy(client_info->mac_dst, arp->mac_dst);ether_addr_copy(client_info->mac_src, arp->mac_src);client_info->slave = assigned_slave; 
+上面三行也就是说包还是从和bond0 Mac地址相同的网卡发出，对端学习到的Mac还是bond0的
+
+如果是广播包的，因为我吗发送的arp request 的目标Mac地址是fffffff.则不像对端发送arp reply来更新接受的网卡client_info->slave
+		if (!ether_addr_equal_64bits(client_info->mac_dst, mac_bcast)) {			client_info->ntt = 1;			bond->alb_info.rx_ntt = 1;		} else {			client_info->ntt = 0;		}
+rlb_arp_recv
+接受到对端发送的arp reply后会，更新client_info，然后置标志位client_info->ntt = 1，bond_info->rx_ntt = 1;这样bond_alb_monitor会触发像对端发送arp reply来更新接收网卡
+	if (arp->op_code == htons(ARPOP_REPLY)) {		/* update rx hash table for this ARP */		rlb_update_entry_from_arp(bond, arp);		netdev_dbg(bond->dev, "Server received an ARP Reply from client\n");	}
+		client_info->ntt = 1;		bond_info->rx_ntt = 1;
+
+bond->alb_info.rx_ntt = 1; 通过这个标志位来触发bond_alb_monitor中的
+		if (bond_info->rx_ntt) {			if (bond_info->rlb_update_delay_counter) {				--bond_info->rlb_update_delay_counter;  20ticks!!!但是现在1秒是1000个tick3			} else {				rlb_update_rx_clients(bond);				if (bond_info->rlb_update_retry_counter)					--bond_info->rlb_update_retry_counter;				else					bond_info->rx_ntt = 0;			}		}
+这段代码的rlb_update_rx_clients(bond);rlb_update_client 发送arp reply 来更新对端的网卡。
+
+确认windos 可以 linux不行的原因。存在这样的问题，对端ppc接收到arp request后会创建arp 表，然后更新当前的时间戳，然后像nor发送arp reply，nvr接收到arp reply后 会向pic再次发送arp reply用于更新ipc的arp表，更新nvr的接收网卡。但是会不会存在这样的问题：pic第一次收到的arp request和下次收到的arp reply的时间在1秒内，导致pic丢弃了后面的arp reply,而windows恰巧是可以的！！！！
+#define ALB_TIMER_TICKS_PER_SEC	    10	/* should be a divisor of HZ */
+#define RLB_UPDATE_DELAY	(2*ALB_TIMER_TICKS_PER_SEC) /* 2 seconds */
+bond->alb_info.rlb_update_delay_counter = RLB_UPDATE_DELAY
+
+
+			if (bond_info->rlb_update_delay_counter) {				--bond_info->rlb_update_delay_counter;  20ticks!!!但是现在1秒是1000个tick3   所以这个时间是不够的！！！
